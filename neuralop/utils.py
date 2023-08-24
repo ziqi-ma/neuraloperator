@@ -15,6 +15,9 @@ class UnitGaussianNormalizer:
         self.mean = torch.mean(x, reduce_dim, keepdim=True).squeeze(0)
         self.std = torch.std(x, reduce_dim, keepdim=True).squeeze(0)
         self.eps = eps
+        print(self.mean)
+        print(self.std)
+        print(self.eps)
         
         if verbose:
             print(f'UnitGaussianNormalizer init on {n_samples}, reducing over {reduce_dim}, samples of shape {shape}.')

@@ -147,7 +147,7 @@ def get_contract_fun(weight, implementation='reconstructed', separable=False):
             elif weight.name.lower().endswith('cp'):
                 return _contract_cp
             else:
-                raise ValueError(f'Got unexpected factorized weight type {weight.name}')
+                raise ValueError(f'Got unjupyter notebook --no-browser --port=XXXXfactorized weight type {weight.name}')
         else:
             raise ValueError(f'Got unexpected weight type of class {weight.__class__.__name__}')
     else:

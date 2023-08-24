@@ -7,7 +7,7 @@ import sys
 import neuralop.mpu.comm as comm
 
 from .patching import MultigridPatching2D
-from .losses import LpLoss
+from .losses import LpLoss, PointwiseQuantileLoss
 
 
 class Trainer:
@@ -263,5 +263,138 @@ class Trainer:
             errors[key] /= n_samples
 
         return errors
+
+    def train_pointwise_err(self, train_loader, test_loaders, output_encoder,
+              model, optimizer, scheduler, regularizer, quantile=0.9,
+              training_loss=None, eval_losses=None):
+        """Trains the given model on the given datasets"""
+        n_train = len(train_loader.dataset)
+
+        if not isinstance(test_loaders, dict):
+            test_loaders = dict(test=test_loaders)
+
+        if self.verbose:
+            print(f'Training on {n_train} samples')
+            print(f'Testing on {[len(loader.dataset) for loader in test_loaders.values()]} samples'
+                  f'         on resolutions {[name for name in test_loaders]}.')
+            sys.stdout.flush()
+
+        if training_loss is None:
+            training_loss = PointwiseQuantileLoss(quantile=quantile)
+
+        if eval_losses is None: # By default just evaluate on the training loss
+            eval_losses = PointwiseQuantileLoss(quantile=quantile)
+
+        if output_encoder is not None:
+            output_encoder.to(self.device)
+        
+        if self.use_distributed:
+            is_logger = (comm.get_world_rank() == 0)
+        else:
+            is_logger = True 
+        
+        for epoch in range(self.n_epochs):
+            avg_loss = 0
+            avg_lasso_loss = 0
+            model.train()
+            t1 = default_timer()
+            train_err = 0.0
+
+            for idx, sample in enumerate(train_loader):
+                x, y = sample['x'], sample['y']
+                
+                if epoch == 0 and idx == 0 and self.verbose and is_logger:
+                    print(f'Training on raw inputs of size {x.shape=}, {y.shape=}')
+
+                x, y = self.patcher.patch(x, y)
+
+                if epoch == 0 and idx == 0 and self.verbose and is_logger:
+                    print(f'.. patched inputs of size {x.shape=}, {y.shape=}')
+
+                x = x.to(self.device)
+                y = y.to(self.device)
+
+                optimizer.zero_grad(set_to_none=True)
+                if regularizer:
+                    regularizer.reset()
+
+                if self.amp_autocast:
+                    with amp.autocast(enabled=True):
+                        out = model(x)
+                else:
+                    out = model(x)
+                if epoch == 0 and idx == 0 and self.verbose and is_logger:
+                    print(f'Raw outputs of size {out.shape=}')
+
+                out, y = self.patcher.unpatch(out, y)
+                #Output encoding only works if output is stiched
+                if output_encoder is not None and self.mg_patching_stitching:
+                    out = output_encoder.decode(out)
+                    y = output_encoder.decode(y)
+                if epoch == 0 and idx == 0 and self.verbose and is_logger:
+                    print(f'.. Processed (unpatched) outputs of size {out.shape=}')
+
+                if self.amp_autocast:
+                    with amp.autocast(enabled=True):
+                        loss = training_loss(out.float(), y)
+                else:
+                    loss = training_loss(out.float(), y)
+
+                if regularizer:
+                    loss += regularizer.loss
+
+                loss.backward()
+                
+                optimizer.step()
+                train_err += loss.item()
+        
+                with torch.no_grad():
+                    avg_loss += loss.item()
+                    if regularizer:
+                        avg_lasso_loss += regularizer.loss
+
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(train_err)
+            else:
+                scheduler.step()
+
+            epoch_train_time = default_timer() - t1
+            del x, y
+
+            train_err/= n_train
+            avg_loss /= self.n_epochs
+            
+            if epoch % self.log_test_interval == 0: 
+                
+                msg = f'[{epoch}] time={epoch_train_time:.2f}, avg_loss={avg_loss:.4f}, train_err={train_err:.4f}'
+
+                values_to_log = dict(train_err=train_err, time=epoch_train_time, avg_loss=avg_loss)
+
+                for loader_name, loader in test_loaders.items():
+                    if epoch == self.n_epochs - 1 and self.log_output:
+                        to_log_output = True
+                    else:
+                        to_log_output = False
+
+                    errors = self.evaluate(model, eval_losses, loader, output_encoder, log_prefix=loader_name)
+
+                    for loss_name, loss_value in errors.items():
+                        msg += f', {loss_name}={loss_value:.4f}'
+                        values_to_log[loss_name] = loss_value
+
+                if regularizer:
+                    avg_lasso_loss /= self.n_epochs
+                    msg += f', avg_lasso={avg_lasso_loss:.5f}'
+
+                if self.verbose and is_logger:
+                    print(msg)
+                    sys.stdout.flush()
+
+                # Wandb loging
+                if self.wandb_log and is_logger:
+                    for pg in optimizer.param_groups:
+                        lr = pg['lr']
+                        values_to_log['lr'] = lr
+                    wandb.log(values_to_log, step=epoch, commit=True)
 
 

@@ -71,9 +71,11 @@ def load_darcy_pt(data_path,
                 channel_dim=1):
     """Load the Navier-Stokes dataset
     """
+    #data = torch.load(Path(data_path).joinpath(f'darcy_train_{train_resolution}.pt').as_posix())
     data = torch.load(Path(data_path).joinpath(f'darcy_train_{train_resolution}.pt').as_posix())
     x_train = data['x'][0:n_train, :, :].unsqueeze(channel_dim).type(torch.float32).clone()
     y_train = data['y'][0:n_train, :, :].unsqueeze(channel_dim).clone()
+    print(data['x'].shape)
     del data
 
     idx = test_resolutions.index(train_resolution)
@@ -123,6 +125,7 @@ def load_darcy_pt(data_path,
         print(f'Loading test db at resolution {res} with {n_test} samples and batch-size={test_batch_size}')
         data = torch.load(Path(data_path).joinpath(f'darcy_test_{res}.pt').as_posix())
         x_test = data['x'][:n_test, :, :].unsqueeze(channel_dim).type(torch.float32).clone()
+        print(data['x'].shape)
         y_test = data['y'][:n_test, :, :].unsqueeze(channel_dim).clone()
         del data 
         if input_encoder is not None:
@@ -135,3 +138,98 @@ def load_darcy_pt(data_path,
         test_loaders[res] = test_loader
 
     return train_loader, test_loaders, output_encoder
+
+# this one just returns a single loader
+def get_darcy_loader_data(datax,datay,
+                batch_size,
+                shuffle,
+                encode_output,
+                grid_boundaries=[[0,1],[0,1]],
+                positional_encoding=False, # assume data passed in already has encoding
+                encode_input=False,
+                encoding='channel-wise', 
+                channel_dim=1):
+    """Load the Navier-Stokes dataset
+    """
+    x_train = datax.clone()
+    y_train = datay.clone()
+    del datax
+    del datay
+    
+    if encode_input:
+        if encoding == 'channel-wise':
+            reduce_dims = list(range(x_train.ndim))
+        elif encoding == 'pixel-wise':
+            reduce_dims = [0]
+        
+        input_encoder = UnitGaussianNormalizer(x_train, reduce_dim=reduce_dims)
+        x_train = input_encoder.encode(x_train)
+    else:
+        input_encoder = None
+
+    if encode_output:
+        if encoding == 'channel-wise':
+            reduce_dims = list(range(y_train.ndim))
+        elif encoding == 'pixel-wise':
+            reduce_dims = [0]
+
+        output_encoder = UnitGaussianNormalizer(y_train, reduce_dim=reduce_dims)
+        y_train = output_encoder.encode(y_train)
+    else:
+        output_encoder = None
+
+    train_db = TensorDataset(x_train, y_train, transform_x=PositionalEmbedding(grid_boundaries, 0) if positional_encoding else None)
+    train_loader = torch.utils.data.DataLoader(train_db,
+                                            batch_size=batch_size, shuffle=shuffle,
+                                            num_workers=0, pin_memory=True, persistent_workers=False)
+
+    return train_loader, output_encoder
+
+def get_darcy_loader(data_path, sample_start, sample_end,
+                batch_size,
+                shuffle,
+                encode_output,
+                scale_y,
+                grid_boundaries=[[0,1],[0,1]],
+                positional_encoding=True,
+                encode_input=False,
+                encoding='channel-wise', 
+                channel_dim=1):
+    """Load the Navier-Stokes dataset
+    """
+    path_prefix = Path(__file__).resolve().parent.joinpath('data').joinpath('darcy_data')
+    datax = torch.load(Path(path_prefix).joinpath(f'{data_path}a.pt').as_posix())
+    datay = torch.load(Path(path_prefix).joinpath(f'{data_path}u.pt').as_posix())*scale_y
+    x_train = datax[sample_start:sample_end, :, :].unsqueeze(channel_dim).type(torch.float32).clone()
+    y_train = datay[sample_start:sample_end, :, :].unsqueeze(channel_dim).clone()
+    del datax
+    del datay
+    
+    if encode_input:
+        if encoding == 'channel-wise':
+            reduce_dims = list(range(x_train.ndim))
+        elif encoding == 'pixel-wise':
+            reduce_dims = [0]
+        
+        input_encoder = UnitGaussianNormalizer(x_train, reduce_dim=reduce_dims)
+        x_train = input_encoder.encode(x_train)
+    else:
+        input_encoder = None
+
+    if encode_output:
+        if encoding == 'channel-wise':
+            reduce_dims = list(range(y_train.ndim))
+        elif encoding == 'pixel-wise':
+            reduce_dims = [0]
+
+        output_encoder = UnitGaussianNormalizer(y_train, reduce_dim=reduce_dims)
+        y_train = output_encoder.encode(y_train)
+    else:
+        output_encoder = None
+
+    train_db = TensorDataset(x_train, y_train, transform_x=PositionalEmbedding(grid_boundaries, 0) if positional_encoding else None)
+    train_loader = torch.utils.data.DataLoader(train_db,
+                                            batch_size=batch_size, shuffle=shuffle,
+                                            num_workers=0, pin_memory=True, persistent_workers=False)
+
+    return train_loader, output_encoder
