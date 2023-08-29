@@ -310,9 +310,8 @@ class PointwiseQuantileLoss(object):
     def rel(self, x, y):
         # y is the pointwise diff value (pred by fixed model - ytrue)
         y_abs = torch.abs(y)
-        diff = y_abs-x
-        quantile_loss_coeff = (diff>0) * self.quantile + (diff<0)*(self.quantile-1)
-        ptwise_loss = quantile_loss_coeff * diff
+        diff = y_abs - x
+        ptwise_loss = torch.max(self.quantile * diff, (self.quantile-1) * diff)
         ptavg_loss = ptwise_loss.view(ptwise_loss.shape[0], -1).mean(1, keepdim=True)
 
         if self.reduce_dims is not None:

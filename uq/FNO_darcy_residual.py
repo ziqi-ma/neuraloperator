@@ -88,7 +88,7 @@ def get_residual(model, encoder, loader):
     for idx, sample in enumerate(loader):
         x, y = sample['x'], sample['y']
         pred = encoder.decode(model(x))
-        error_list.append((pred-y).squeeze())
+        error_list.append(torch.abs(pred-y).squeeze().detach()) # detach, otherwise residual carries gradient of model weight
         x_list.append(x)
     errors = torch.cat(error_list, axis=0)
     xs = torch.cat(x_list, axis=0)
@@ -97,7 +97,6 @@ def get_residual(model, encoder, loader):
 def load_initial_model():
     model_quantile = TFNO(n_modes=(6,6), hidden_channels=20, projection_channels=16, factorization='tucker', rank=0.42)
     model_quantile.load_state_dict(torch.load("model500"))
-    model_quantile.eval()
     return model_quantile
 
 def freeze_base_layers(model):
@@ -116,7 +115,7 @@ def train_quantile_model(base_model, train_loader, encoder, val_loader):
     quantile_loss = PointwiseQuantileLoss(quantile=0.9)
     train_loss = quantile_loss
     eval_losses={'quantile loss': quantile_loss}
-    trainer = Trainer(model_frozen, n_epochs=200,
+    trainer = Trainer(model_frozen, n_epochs=100,
                   device=device,
                   mg_patching_levels=0,
                   wandb_log=False,
@@ -150,15 +149,14 @@ def calibrate_quantile_model(model, model_encoder, calib_loader):
     val_ratio_list = []
     for idx, sample in enumerate(calib_loader):
         x, y = sample['x'], sample['y']
-        pred = model_encoder.decode(model(x))
+        pred = model_encoder.decode(model(x)).squeeze()
         ratio = torch.abs(y)/pred
         val_ratio_list.append(ratio.squeeze())
     val_ratios = torch.cat(val_ratio_list, axis=0)
-
-    val_ratios_pointwise_quantile = torch.topk(val_ratios.view(val_ratios.shape[0], -1),3, dim=1)
+    val_ratios_pointwise_quantile = torch.topk(val_ratios.view(val_ratios.shape[0], -1),3, dim=1).values[:,-1]
     # assert above has shape of [1000,1]
-    print(val_ratios_pointwise_quantile.shape)
-    scale_factor = torch.topk(val_ratios_pointwise_quantile, 60, dim=0)
+    # print(val_ratios_pointwise_quantile)
+    scale_factor = torch.topk(val_ratios_pointwise_quantile, 60, dim=0).values[-1]
     print(scale_factor)
     return scale_factor
 
@@ -173,16 +171,16 @@ def eval_coverage(model, model_encoder, residual_loader, target_point_percentage
     for idx, sample in enumerate(residual_loader):
         x, y = sample['x'], sample['y']
         pred = model_encoder.decode(model(x)) * scale
-        in_pred = torch.abs(y) < pred
+        in_pred = (torch.abs(y) < pred).float()
 
         #we need to get a boolean of whether 95% of pts are in ball
         avg_interval = torch.abs(pred).view(pred.shape[0],-1).mean(dim=1)
         avg_interval_list.append(avg_interval)
 
         in_pred_flattened = in_pred.view(in_pred.shape[0], -1)
-        in_pred_instancewise = in_pred_flattened.mean(dim=1) >= target_point_percentage # expected shape (batchsize, 1)
-        print(in_pred_instancewise.shape)
-        in_pred_list.append(in_pred_instancewise)
+        # print(torch.mean(in_pred_flattened,dim=1))
+        in_pred_instancewise = torch.mean(in_pred_flattened,dim=1) >= target_point_percentage # expected shape (batchsize, 1)
+        in_pred_list.append(in_pred_instancewise.float())
 
     in_pred = torch.cat(in_pred_list, axis=0)
     intervals = torch.cat(avg_interval_list, axis=0)
@@ -190,11 +188,12 @@ def eval_coverage(model, model_encoder, residual_loader, target_point_percentage
     in_pred_percentage = torch.mean(in_pred, dim=0)
 
     print(f"{in_pred_percentage} of instances satisfy that >= {target_point_percentage} pts drawn are inside the predicted quantile")
-    print(f"Mean interval width of unscaled is {mean_interval}")
+    print(f"Mean interval width is {mean_interval}")
     return mean_interval, in_pred_percentage
 
 
 initial_model = load_initial_model()#train_initial_model(train_loader_first_half, initial_model_encoder, val_loader)
+initial_model.eval()
 x_train_second_half, residual_train = get_residual(initial_model, initial_model_encoder, train_loader_second_half)
 x_val, residual_val = get_residual(initial_model, initial_model_encoder, val_loader)
 x_test, residual_test = get_residual(initial_model, initial_model_encoder, test_loader)
@@ -216,3 +215,5 @@ calibrated_model_mean_interval, calibrated_model_percentage = eval_coverage(quan
 
 print(f"uncalibrated, interval {uncalibrated_model_mean_interval}, function space coverage {uncalibrated_model_percentage}")
 print(f"calibrated, interval {calibrated_model_mean_interval}, function space coverage {calibrated_model_percentage}")
+# 0.219 coverage 100%
+
