@@ -109,13 +109,13 @@ def freeze_base_layers(model):
 def train_quantile_model(base_model, train_loader, encoder, val_loader):
     model_frozen = freeze_base_layers(base_model)
     optimizer_quantile = torch.optim.Adam(model_frozen.projection.parameters(), # this should only take unfrozen params
-                                lr=3e-3, 
-                                weight_decay=1e-4)
+                                lr=2e-3, 
+                                weight_decay=2e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_quantile, T_max=800)
     quantile_loss = PointwiseQuantileLoss(quantile=0.9)
     train_loss = quantile_loss
     eval_losses={'quantile loss': quantile_loss}
-    trainer = Trainer(model_frozen, n_epochs=100,
+    trainer = Trainer(model_frozen, n_epochs=200,
                   device=device,
                   mg_patching_levels=0,
                   wandb_log=False,
@@ -136,15 +136,15 @@ def train_quantile_model(base_model, train_loader, encoder, val_loader):
 
 # note that calib loader should output residuals
 # calibrate
-# note that in this case we are choosing delta=0.1 (90% CI on function space)
+# note that in this case we are choosing delta=0.01 (99% CI on function space) and alpha=0.1
 # and m = 1000, so the min alpha (percentage of points in domain that violate ball)
-# is sqrt(-ln(delta)/2m)=sqrt(-ln(0.1)/2000)=0.034. We choose alpha=0.05, i.e. 95% of points in domain lie in ball
-# t should < alpha, let t=0.04
+# is sqrt(-ln(delta)/2m)=sqrt(-ln(0.01)/2000)=0.048. We choose alpha=0.1, i.e. 90% of points in domain lie in ball
+# t should < alpha, let t=0.06
 
-# so score is 1-0.05+0.04=99 percentile of all 16*16 points in domain per function
-# in terms of |error|/pred_error, i.e. [254]
-# and we want the ceil(1001*(0.1-e^-2000*0.04*0.04))/1000 = (1000-59)/1000'th percentile in the 1000 samples
-# i.e. ranked, [940]
+# so score is 1-0.1+0.06=94 percentile of all 16*16 points in domain per function
+# in terms of |error|/pred_error, i.e. [241]
+# and we want the ceil(1001*(0.1-e^-2000*0.06*0.06))/1000 = (1000-101)/1000'th percentile in the 1000 samples
+# i.e. ranked, [899]
 def calibrate_quantile_model(model, model_encoder, calib_loader):
     val_ratio_list = []
     for idx, sample in enumerate(calib_loader):
@@ -153,10 +153,10 @@ def calibrate_quantile_model(model, model_encoder, calib_loader):
         ratio = torch.abs(y)/pred
         val_ratio_list.append(ratio.squeeze())
     val_ratios = torch.cat(val_ratio_list, axis=0)
-    val_ratios_pointwise_quantile = torch.topk(val_ratios.view(val_ratios.shape[0], -1),3, dim=1).values[:,-1]
+    val_ratios_pointwise_quantile = torch.topk(val_ratios.view(val_ratios.shape[0], -1),15, dim=1).values[:,-1]
     # assert above has shape of [1000,1]
     # print(val_ratios_pointwise_quantile)
-    scale_factor = torch.topk(val_ratios_pointwise_quantile, 60, dim=0).values[-1]
+    scale_factor = torch.topk(val_ratios_pointwise_quantile, 101, dim=0).values[-1]
     print(scale_factor)
     return scale_factor
 
@@ -178,7 +178,7 @@ def eval_coverage(model, model_encoder, residual_loader, target_point_percentage
         avg_interval_list.append(avg_interval)
 
         in_pred_flattened = in_pred.view(in_pred.shape[0], -1)
-        # print(torch.mean(in_pred_flattened,dim=1))
+        #print(torch.mean(in_pred_flattened,dim=1))
         in_pred_instancewise = torch.mean(in_pred_flattened,dim=1) >= target_point_percentage # expected shape (batchsize, 1)
         in_pred_list.append(in_pred_instancewise.float())
 
@@ -206,14 +206,16 @@ val_err_loader, _ = get_darcy_loader_data(datax=x_val, datay=residual_val, batch
 test_err_loader, _ = get_darcy_loader_data(datax=x_test, datay=residual_test, batch_size=32, shuffle=False, encode_output=False)
 
 reload_model = load_initial_model()
-quantile_model = train_quantile_model(reload_model, ptwise_quantile_train_loader, quantile_model_encoder, val_err_loader)
+#quantile_model = train_quantile_model(reload_model, ptwise_quantile_train_loader, quantile_model_encoder, val_err_loader)
+quantile_model = TFNO(n_modes=(6,6), hidden_channels=20, projection_channels=16, factorization='tucker', rank=0.42)
+quantile_model.load_state_dict(torch.load("pt_quantile_model"))
 scale_factor = calibrate_quantile_model(quantile_model, quantile_model_encoder, val_err_loader)
 
 # evaluate unscaled
-uncalibrated_model_mean_interval, uncalibrated_model_percentage = eval_coverage(quantile_model, quantile_model_encoder, test_err_loader, 0.95)
-calibrated_model_mean_interval, calibrated_model_percentage = eval_coverage(quantile_model, quantile_model_encoder, test_err_loader, 0.95, scale=scale_factor)
+uncalibrated_model_mean_interval, uncalibrated_model_percentage = eval_coverage(quantile_model, quantile_model_encoder, test_err_loader, 0.9)
+calibrated_model_mean_interval, calibrated_model_percentage = eval_coverage(quantile_model, quantile_model_encoder, test_err_loader, 0.9, scale=scale_factor)
 
 print(f"uncalibrated, interval {uncalibrated_model_mean_interval}, function space coverage {uncalibrated_model_percentage}")
 print(f"calibrated, interval {calibrated_model_mean_interval}, function space coverage {calibrated_model_percentage}")
-# 0.219 coverage 100%
+# 1.27 coverage 97%
 

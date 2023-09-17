@@ -137,15 +137,16 @@ def get_residual(model, encoder, loader, decode_inputy=False):
         pred = encoder.decode(model(x))
         if decode_inputy:
             y = encoder.decode(y)
-        error_list.append(pred-y.squeeze().detach()) # detach, otherwise residual carries gradient of model weight
+        error = (pred-y).squeeze().detach()
+        error_list.append(error)
         x_list.append(x)
     errors = torch.cat(error_list, axis=0)
     xs = torch.cat(x_list, axis=0)
     return xs, errors
 
-_, train_errors = get_residual(model, decode_inputy=True)
-_, val_errors = get_residual(model)
-_, test_errors = get_residual(model)
+_, train_errors = get_residual(model, initial_model_encoder, train_loader_full, decode_inputy=True)
+_, val_errors = get_residual(model, initial_model_encoder, val_loader)
+_, test_errors = get_residual(model, initial_model_encoder, test_loader)
 
 # get pseudo density of val errors based on train errors
 
@@ -167,54 +168,49 @@ def get_pseudo_density_score(f):
     diff = f - train_errors # this should be of dim n*16*16
     d = torch.mean(diff, dim=[1,2]) # this should be of dim n*1
     kernel_value = (np.pi*sd) * np.exp(-0.5*((d/h-mean)/sd)**2)# this should be of dim n*1
-    score = np.mean(kernel_value)
+    score = kernel_value.mean() # it's a one-element array, take it out
     return score
 
 def get_scores(errors):
     scores = []
-    for i in errors.shape[0]:
+    for i in range(errors.shape[0]):
         score = get_pseudo_density_score(errors[i,:,:])
         scores.append(score)
-    return scores
+    return torch.stack(scores)
 
-# get empirical percentiles, 5% and 95%, for 1000 samples 50 and 950
+# get empirical percentiles, this is nonconformity score so only upper limit
 val_scores = get_scores(val_errors)
-score_lo = sorted(val_scores)[50]
-score_hi = sorted(val_scores)[950]
+score_hi = sorted(val_scores)[900]
 # plot histogram
-print(score_lo)
 print(score_hi)
-plt.hist(val_scores.detach().numpy())
+plt.hist(val_scores)
 plt.savefig("calib dist pseudo density nonconformity score")
 
 # for test set
 test16_scores = get_scores(test_errors)
-
-test16_in = np.sum(test16_scores>score_lo & test16_scores < score_hi)
+test16_in = (test16_scores < score_hi).long().sum()
 plt.hist(test16_scores.detach().numpy())
 plt.savefig("res16 dist")
-print(f"res 16 coverage: {test16_in}/1000 = {test16_in/1000}")
+print(f"res 16 coverage: {test16_in}/1000 = {test16_in/1000}") #89%
 
 # now get pointwise via GP
 # to be implemented
-N = 500000
+N = 1000
 
 x0 = np.linspace(0, 1, 16)
 x1 = np.linspace(0, 1, 16)
-kernel = C(0.002, (1e-3, 1e3)) * RBF(0.1, (1e-2, 1e2))
+kernel = C(0.7, (1e-3, 1e3)) * RBF(0.1, (1e-2, 1e2))
 gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=15)
 x0x1 = np.array(list(product(x0, x1)))
-y_sample = gp.sample_y(x0x1, N)
-print(y_sample) # what is the shape? expecting 256*N
-scores = get_scores(y_sample)
-print(scores)
-scores_abovel = scores > score_lo.item()
-scores_belowh = scores < score_hi.item()
-picked = scores_abovel & scores_belowh
-picked_samples = y_sample.T[picked].reshape(16, 16, -1)
-print(picked_samples.shape[2])
-pointwise_max = picked_samples.max(2)
-pointwise_min = picked_samples.min(2)
+y_sample = gp.sample_y(x0x1, N).T.reshape(-1,16,16)
+print(y_sample.shape) # what is the shape? expecting N*16*16
+scores = get_scores(torch.Tensor(y_sample))
+print(scores.shape)
+picked = scores < score_hi.item()
+picked_samples = y_sample[picked]
+print(picked_samples.shape[0])
+pointwise_max = picked_samples.max(0)
+pointwise_min = picked_samples.min(0)
 #print(pointwise_max)
 #print(pointwise_min)
 error_width = pointwise_max - pointwise_min
@@ -231,3 +227,5 @@ true_coverage = torch.mean(inball.float()).item()
 print(f"true coverage: {true_coverage}")
 avg_band_len = (pointwise_max - pointwise_min).mean()
 print(avg_band_len)
+
+# 33%, 4.64, 98%, 5.41

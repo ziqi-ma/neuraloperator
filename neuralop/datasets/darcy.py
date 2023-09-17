@@ -1,23 +1,27 @@
-import torch
 from pathlib import Path
+import torch
 
 from ..utils import UnitGaussianNormalizer
 from .tensor_dataset import TensorDataset
 from .transforms import PositionalEmbedding
 
 
-def load_darcy_flow_small(n_train, n_tests,
-                batch_size, test_batch_sizes,
-                test_resolutions=[16, 32],
-                grid_boundaries=[[0,1],[0,1]],
-                positional_encoding=True,
-                encode_input=False,
-                encode_output=True,
-                encoding='channel-wise', 
-                channel_dim=1):
+def load_darcy_flow_small(
+    n_train,
+    n_tests,
+    batch_size,
+    test_batch_sizes,
+    test_resolutions=[16, 32],
+    grid_boundaries=[[0, 1], [0, 1]],
+    positional_encoding=True,
+    encode_input=False,
+    encode_output=True,
+    encoding="channel-wise",
+    channel_dim=1,
+):
     """Loads a small Darcy-Flow dataset
-    
-    Training contains 1000 samples in resolution 16x16. 
+
+    Training contains 1000 samples in resolution 16x16.
     Testing contains 100 samples at resolution 16x16 and
     50 samples at resolution 32x32.
 
@@ -34,7 +38,8 @@ def load_darcy_flow_small(n_train, n_tests,
     encode_output : bool, default is True
     encoding : 'channel-wise'
     channel_dim : int, default is 1
-        where to put the channel dimension, defaults size is batch, channel, height, width
+        where to put the channel dimension, defaults size is 1
+        i.e: batch, channel, height, width
 
     Returns
     -------
@@ -83,15 +88,17 @@ def load_darcy_pt(data_path,
     n_test = n_tests.pop(idx)
     test_batch_size = test_batch_sizes.pop(idx)
 
-    data = torch.load(Path(data_path).joinpath(f'darcy_test_{train_resolution}.pt').as_posix())
-    x_test = data['x'][:n_test, :, :].unsqueeze(channel_dim).type(torch.float32).clone()
-    y_test = data['y'][:n_test, :, :].unsqueeze(channel_dim).clone()
+    data = torch.load(
+        Path(data_path).joinpath(f"darcy_test_{train_resolution}.pt").as_posix()
+    )
+    x_test = data["x"][:n_test, :, :].unsqueeze(channel_dim).type(torch.float32).clone()
+    y_test = data["y"][:n_test, :, :].unsqueeze(channel_dim).clone()
     del data
-    
+
     if encode_input:
-        if encoding == 'channel-wise':
+        if encoding == "channel-wise":
             reduce_dims = list(range(x_train.ndim))
-        elif encoding == 'pixel-wise':
+        elif encoding == "pixel-wise":
             reduce_dims = [0]
 
         input_encoder = UnitGaussianNormalizer(x_train, reduce_dim=reduce_dims)
@@ -101,9 +108,9 @@ def load_darcy_pt(data_path,
         input_encoder = None
 
     if encode_output:
-        if encoding == 'channel-wise':
+        if encoding == "channel-wise":
             reduce_dims = list(range(y_train.ndim))
-        elif encoding == 'pixel-wise':
+        elif encoding == "pixel-wise":
             reduce_dims = [0]
 
         output_encoder = UnitGaussianNormalizer(y_train, reduce_dim=reduce_dims)
@@ -131,10 +138,21 @@ def load_darcy_pt(data_path,
         if input_encoder is not None:
             x_test = input_encoder.encode(x_test)
 
-        test_db = TensorDataset(x_test, y_test, transform_x=PositionalEmbedding(grid_boundaries, 0) if positional_encoding else None)
-        test_loader = torch.utils.data.DataLoader(test_db,
-                                                  batch_size=test_batch_size, shuffle=False,
-                                                  num_workers=0, pin_memory=True, persistent_workers=False)
+        test_db = TensorDataset(
+            x_test,
+            y_test,
+            transform_x=PositionalEmbedding(grid_boundaries, 0)
+            if positional_encoding
+            else None,
+        )
+        test_loader = torch.utils.data.DataLoader(
+            test_db,
+            batch_size=test_batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=True,
+            persistent_workers=False,
+        )
         test_loaders[res] = test_loader
 
     return train_loader, test_loaders, output_encoder

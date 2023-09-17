@@ -152,15 +152,16 @@ print(torch.min(all_y))
 y_range = torch.max(all_y)-torch.min(all_y)
 plt.hist(res16_scores.detach().numpy())
 plt.savefig("res16 dist")
-print(f"res 16 coverage: {res16_inball_count}/1000 = {res16_inball_count/1000}")
+print(f"res 16 coverage: {res16_inball_count}/1000 = {res16_inball_count/1000}") # 0.89
 print(f"y standard deviation overall: {all_y_sd}, overall range: {y_range}")
+# 2.15, 8.36
 
 # method 1 overall conformal
 N = 500000
 
 x0 = np.linspace(0, 1, 16)
 x1 = np.linspace(0, 1, 16)
-kernel = C(0.002, (1e-3, 1e3)) * RBF(0.1, (1e-2, 1e2))
+kernel = C(0.7, (1e-3, 1e3)) * RBF(0.3, (1e-2, 1e2))
 gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=15)
 x0x1 = np.array(list(product(x0, x1)))
 y_sample = gp.sample_y(x0x1, N)
@@ -169,10 +170,10 @@ print(scores)
 scores_abovel = scores > score_lo.item()
 scores_belowh = scores < score_hi.item()
 picked = scores_abovel & scores_belowh
-picked_samples = y_sample.T[picked].reshape(16, 16, -1)
-print(picked_samples.shape[2])
-pointwise_max = picked_samples.max(2)
-pointwise_min = picked_samples.min(2)
+picked_samples = y_sample.T[picked].reshape(-1, 16, 16)
+print(picked_samples.shape[0])
+pointwise_max = picked_samples.max(0)
+pointwise_min = picked_samples.min(0)
 #print(pointwise_max)
 #print(pointwise_min)
 error_width = pointwise_max - pointwise_min
@@ -186,9 +187,9 @@ total = 0
 flags= (res16_errors > torch.Tensor(pointwise_min)) & (res16_errors < torch.Tensor(pointwise_max))
 inball = torch.all(flags.view(flags.shape[0], -1), dim=1)
 true_coverage = torch.mean(inball.float()).item()
-print(f"true coverage: {true_coverage}") # 0.95
+print(f"true coverage: {true_coverage}") # 0.999
 avg_band_len = (pointwise_max - pointwise_min).mean()
-print(avg_band_len) # 0.42
+print(avg_band_len) # 5.845
 
 
 ## method 2 pointwise conformal
@@ -202,6 +203,6 @@ pointwise_min = -min2.values[0,:,:]
 flags= (res16_errors > torch.Tensor(pointwise_min)) & (res16_errors < torch.Tensor(pointwise_max))
 inball = torch.all(flags.view(flags.shape[0], -1), dim=1)
 true_coverage = torch.mean(inball.float()).item()
-print(f"pointwise calib true coverage: {true_coverage}") # 0.88
+print(f"pointwise calib true coverage: {true_coverage}") # 0.92
 avg_band_len = (pointwise_max - pointwise_min).mean()
-print(avg_band_len) # 0.33
+print(avg_band_len) # 1.69
