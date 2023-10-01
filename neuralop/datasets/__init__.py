@@ -1,5 +1,5 @@
 # from .burgers import load_burgers
-from .darcy import load_darcy_pt, load_darcy_flow_small
+from .darcy import load_darcy_pt, load_darcy_flow_small, get_darcy_loader, get_darcy_loader_data
 from .spherical_swe import load_spherical_swe
 from .navier_stokes import load_navier_stokes_pt 
 #, load_navier_stokes_zarr

@@ -277,6 +277,53 @@ class H1Loss(object):
         return self.rel(x, y, h=h)
 
 
+class PointwiseQuantileLoss(object):
+    def __init__(self, quantile, reduce_dims = 0, reductions='sum'):
+        # for now only support 1d as in output function's codomain is R
+        super().__init__()
+
+        self.quantile = quantile
+
+        if isinstance(reduce_dims, int):
+            self.reduce_dims = [reduce_dims]
+        else:
+            self.reduce_dims = reduce_dims
+        
+        if self.reduce_dims is not None:
+            if isinstance(reductions, str):
+                assert reductions == 'sum' or reductions == 'mean'
+                self.reductions = [reductions]*len(self.reduce_dims)
+            else:
+                for j in range(len(reductions)):
+                    assert reductions[j] == 'sum' or reductions[j] == 'mean'
+                self.reductions = reductions
+    
+    def reduce_all(self, x):
+        for j in range(len(self.reduce_dims)):
+            if self.reductions[j] == 'sum':
+                x = torch.sum(x, dim=self.reduce_dims[j], keepdim=True)
+            else:
+                x = torch.mean(x, dim=self.reduce_dims[j], keepdim=True)
+        
+        return x
+        
+    def rel(self, x, y):
+        # y is the pointwise diff value (pred by fixed model - ytrue)
+        y_abs = torch.abs(y)
+        diff = y_abs - x
+        ptwise_loss = torch.max(self.quantile * diff, (self.quantile-1) * diff)
+        ptavg_loss = ptwise_loss.view(ptwise_loss.shape[0], -1).mean(1, keepdim=True)
+
+        if self.reduce_dims is not None:
+            loss_batch = self.reduce_all(ptavg_loss).squeeze()
+            
+        return loss_batch
+
+
+    def __call__(self, x, y):
+        return self.rel(x, y)
+
+
 class IregularLpqLoss(torch.nn.Module):
     def __init__(self, p=2.0, q=2.0):
         super().__init__()
