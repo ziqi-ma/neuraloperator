@@ -24,6 +24,9 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
 from itertools import product
+from mpl_toolkits import mplot3d
+import numpy as np
+import matplotlib.pyplot as plt
 
 device = 'cpu'
 
@@ -198,6 +201,12 @@ x_train_second_half, residual_train = get_residual(initial_model, initial_model_
 x_val, residual_val = get_residual(initial_model, initial_model_encoder, val_loader)
 x_test, residual_test = get_residual(initial_model, initial_model_encoder, test_loader)
 
+plot_idx = 17
+test_sample = test_loader.dataset[plot_idx]
+x_plot, y_plot = test_sample['x'], test_sample['y']
+pred_plot = initial_model_encoder.decode(initial_model(torch.unsqueeze(x_plot,0)))
+pred_plot = torch.squeeze(pred_plot).detach().numpy()
+
 del initial_model
 
 # create train loader for the ptwise quantile quantifier
@@ -212,10 +221,36 @@ quantile_model.load_state_dict(torch.load("pt_quantile_model"))
 scale_factor = calibrate_quantile_model(quantile_model, quantile_model_encoder, val_err_loader)
 
 # evaluate unscaled
-uncalibrated_model_mean_interval, uncalibrated_model_percentage = eval_coverage(quantile_model, quantile_model_encoder, test_err_loader, 0.9)
+uncalibrated_model_mean_interval, uncalibrated_model_percentage = eval_coverage(quantile_model, quantile_model_encoder, test_err_loader, 0.9) # 1.24, 73%
 calibrated_model_mean_interval, calibrated_model_percentage = eval_coverage(quantile_model, quantile_model_encoder, test_err_loader, 0.9, scale=scale_factor)
 
 print(f"uncalibrated, interval {uncalibrated_model_mean_interval}, function space coverage {uncalibrated_model_percentage}")
 print(f"calibrated, interval {calibrated_model_mean_interval}, function space coverage {calibrated_model_percentage}")
 # 1.27 coverage 97%
+
+residual_pred = quantile_model_encoder.decode(quantile_model(torch.unsqueeze(x_plot,0)))
+residual_pred = torch.squeeze(residual_pred)
+z_residual = (residual_pred * scale_factor).detach().numpy()
+# plot scaled
+# one example
+x = np.repeat(np.arange(16)*1.0/16, 16)
+y = np.tile(np.arange(16)*1.0/16,16)
+z = y_plot.detach().numpy().reshape(256)
+pred_up = (pred_plot + z_residual).reshape(256)
+pred_lo = (pred_plot - z_residual).reshape(256)
+
+# Creating figure
+fig = plt.figure(figsize =(14, 9))
+ax = plt.axes(projection ='3d')
+ 
+# Creating plot
+#ax.plot_surface(x, y, z_residual)
+ax.scatter3D(x, y, z, color = "black")
+ax.scatter3D(x, y, pred_plot, color = "red")
+#ax.scatter3D(x, y, pred_up, color = "green")
+#ax.scatter3D(x, y, pred_lo, color = "yellow")
+in_interval = np.mean(np.logical_and(z < pred_up, z > pred_lo) * 1)
+plt.title(f"Test index {plot_idx}, {in_interval} points in interval")
+plt.savefig("ScatterTrue01.png")
+
 
